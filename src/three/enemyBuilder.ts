@@ -1853,6 +1853,12 @@ export function buildProceduralEnemy(
   };
 }
 
+// Altura base de la pelvis, guardada la primera vez que se usa (la animación la mueve con el rebote al andar)
+function alturaBasePelvis(pelvis: THREE.Group): number {
+  if (pelvis.userData.alturaBase === undefined) pelvis.userData.alturaBase = pelvis.position.y;
+  return pelvis.userData.alturaBase as number;
+}
+
 export function updateEnemyAnimation(
   rig: BuiltEnemyRig,
   animState: AnimationState,
@@ -1962,7 +1968,8 @@ export function updateEnemyAnimation(
     const stride = Math.sin(t * 5.6);
     const bounce = Math.abs(Math.cos(t * 5.6)) * 0.06;
 
-    pelvisGroup.position.y += bounce;
+    // Rebote sobre la altura base de la pelvis: sumar cada fotograma la hacía subir sin parar
+    pelvisGroup.position.y = alturaBasePelvis(pelvisGroup) + bounce;
     headGroup.rotation.y = THREE.MathUtils.damp(headGroup.rotation.y, stride * 0.1, dampLambda, delta);
     jawGroup.rotation.x = THREE.MathUtils.damp(jawGroup.rotation.x, 0.15, dampLambda, delta);
 
@@ -2011,5 +2018,10 @@ export function updateEnemyAnimation(
     headGroup.rotation.x = THREE.MathUtils.damp(headGroup.rotation.x, 0.45, 5, delta);
     rightArmGroup.rotation.x = THREE.MathUtils.damp(rightArmGroup.rotation.x, -1.15, 5, delta);
     leftArmGroup.rotation.x = THREE.MathUtils.damp(leftArmGroup.rotation.x, -1.05, 5, delta);
+  }
+
+  // Fuera de andar, la pelvis vuelve a su altura base (salvo los enemigos que flotan, que tienen su propio vaivén)
+  if (animState !== 'walk' && !isFloating) {
+    pelvisGroup.position.y = THREE.MathUtils.damp(pelvisGroup.position.y, alturaBasePelvis(pelvisGroup), dampLambda, delta);
   }
 }
