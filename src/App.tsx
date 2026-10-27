@@ -823,6 +823,15 @@ export default function App() {
 
         {/* Zone 3: 1 Primary Action */}
         <div className="flex items-center gap-3 shrink-0">
+          {window.parent !== window && (
+            <button
+              onClick={() => window.parent.postMessage({ tipo: 'enemigo-disenado', config }, window.location.origin)}
+              className="px-3 sm:px-4 py-2 text-xs font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              title="Enviar este enemigo al mundo que estás creando"
+            >
+              Usar en el mundo
+            </button>
+          )}
           <button
             onClick={() => setIsExportModalOpen(true)}
             className="px-3 sm:px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
