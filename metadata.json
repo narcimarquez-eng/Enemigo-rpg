@@ -1,0 +1,6 @@
+{
+  "name": "AetherForge 3D — RPG Enemy Creator & GLB/Three.js Exporter",
+  "description": "Editor procedural 3D de alta precisión para crear, animar, configurar hitboxes y exportar enemigos de juegos de rol en formato binario .GLB y código nativo Three.js / TypeScript.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
