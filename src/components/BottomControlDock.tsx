@@ -26,13 +26,16 @@ import {
   ARCHETYPE_PRESETS,
   AiBehaviorType,
   AnimationState,
+  ArchetypeAnatomyCategory,
   ArchetypeId,
+  AuraParticleEffectId,
   BodyPlan,
   CameraPresetId,
   DorsalType,
   ElementAffinity,
   EnemyConfig,
   EnemyTier,
+  HairStyleId,
   HelmStyle,
   LightingPresetId,
   MATERIAL_PRESETS,
@@ -45,8 +48,16 @@ import {
   TexturePatternId,
   WeaponType,
   calculateThreatScore,
+  getEffectiveAnatomyCategory,
+  getEffectiveFurDensity,
+  getEffectiveHairLength,
+  getEffectiveHairStyle,
   getEffectiveMeshDensity,
+  getEffectiveMuscleDefinition,
   getEffectiveTexturePattern,
+  getEffectiveWeapon,
+  isAnimalEnemy,
+  isUndeadArchetype,
 } from '../types/enemy';
 
 export type DockTabId = 'catalog' | 'anatomy' | 'equipment' | 'scene' | 'rpg';
@@ -74,6 +85,8 @@ interface BottomControlDockProps {
   onToggleWireframe: () => void;
   autoRotate: boolean;
   onToggleAutoRotate: () => void;
+  auraParticleMode: AuraParticleEffectId;
+  onAuraParticleModeChange: (mode: AuraParticleEffectId) => void;
   onRandomize: () => void;
   onQuickExportGLB: () => void;
   onOpenExportModal: () => void;
@@ -91,15 +104,47 @@ const BODY_PLAN_OPTIONS: Array<{ id: BodyPlan; label: string }> = [
   { id: 'biped_titan', label: 'Titán Bípedo / Minotauro' },
 ];
 
+const ANIMAL_ATTACK_OPTIONS: Array<{ id: WeaponType; label: string; shortLabel: string }> = [
+  {
+    id: 'feral_claws_fangs',
+    label: 'Mordisco Salvaje (Fauces y Colmillos)',
+    shortLabel: 'Mordisco',
+  },
+  {
+    id: 'leap_fang_bite',
+    label: 'Salto con Mordida (Abalanzo Depredador)',
+    shortLabel: 'Salto Mordida',
+  },
+  {
+    id: 'ram_charge',
+    label: 'Embestida Brutal (Cabeza / Cuernos)',
+    shortLabel: 'Embestida',
+  },
+  {
+    id: 'dragon_breath_maw',
+    label: 'Fuego Real por la Boca (Llamarada Volumétrica)',
+    shortLabel: 'Fuego Boca',
+  },
+  {
+    id: 'frost_breath_maw',
+    label: 'Skill de Hielo por la Boca (Ventisca Glacial)',
+    shortLabel: 'Hielo Boca',
+  },
+];
+
 const WEAPON_OPTIONS: Array<{ id: WeaponType; label: string }> = [
-  { id: 'dragon_breath_maw', label: 'Aliento Elemental y Fauces' },
-  { id: 'feral_claws_fangs', label: 'Zarpas y Colmillos Salvajes' },
+  { id: 'feral_claws_fangs', label: 'Mordisco Salvaje (Fauces y Colmillos)' },
+  { id: 'leap_fang_bite', label: 'Salto con Mordida (Abalanzo Depredador)' },
+  { id: 'ram_charge', label: 'Embestida Brutal (Cabeza / Cuernos)' },
+  { id: 'dragon_breath_maw', label: 'Fuego Real por la Boca (Llamarada Volumétrica)' },
+  { id: 'frost_breath_maw', label: 'Skill de Hielo por la Boca (Ventisca Glacial)' },
   { id: 'runic_greatsword', label: 'Mandoble Rúnico' },
   { id: 'obsidian_warhammer', label: 'Martillo de Asedio' },
   { id: 'arcane_staff', label: 'Bastón Arcano' },
   { id: 'twin_reaver_axes', label: 'Labrys / Hacha Doble' },
   { id: 'radiant_halberd', label: 'Alabarda Celestial' },
-  { id: 'venom_scythe_claws', label: 'Guadaña de Quitina' },
+  { id: 'venom_scythe_claws', label: 'Guadaña de Campeón' },
+  { id: 'bone_recurved_bow', label: 'Arco Compuesto con Flechas 3D' },
 ];
 
 const OFFHAND_OPTIONS: Array<{ id: OffhandType; label: string }> = [
@@ -122,6 +167,7 @@ const HELM_OPTIONS: Array<{ id: HelmStyle; label: string }> = [
   { id: 'valkyrie_crest', label: 'Cresta de Valquiria / Djinn' },
   { id: 'arachnid_mandibles', label: 'Quelíceros Arácnidos' },
   { id: 'drake_fang_helm', label: 'Yelmo Sangredragón' },
+  { id: 'goblin_feral_face', label: 'Rostro Esculpido de Trasgo (Dientes y Ojos Rabiosos)' },
 ];
 
 const DORSAL_OPTIONS: Array<{ id: DorsalType; label: string }> = [
@@ -159,6 +205,8 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
   onToggleWireframe,
   autoRotate,
   onToggleAutoRotate,
+  auraParticleMode,
+  onAuraParticleModeChange,
   onRandomize,
   onQuickExportGLB,
   onOpenExportModal,
@@ -177,10 +225,14 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
     onChangeConfig(() => structuredClone(ARCHETYPE_PRESETS[nextKey]));
   };
 
-  const filteredArchetypes = ALL_ARCHETYPE_KEYS.filter(
-    (archId) =>
-      selectedCategory === 'all' || ARCHETYPE_PRESETS[archId].raceCategory === selectedCategory
-  );
+  const filteredArchetypes = ALL_ARCHETYPE_KEYS.filter((archId) => {
+    if (selectedCategory === 'all') return true;
+    const preset = ARCHETYPE_PRESETS[archId];
+    if (selectedCategory === 'undead') {
+      return preset.raceCategory === 'undead' || isUndeadArchetype(preset);
+    }
+    return preset.raceCategory === selectedCategory;
+  });
 
   return (
     <div className="fixed inset-x-0 bottom-3 z-30 mx-auto w-[min(1080px,95vw)] pointer-events-auto">
@@ -248,8 +300,45 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
           )}
         </div>
 
-        {/* Right: Expand Height Toggle + Collapse Dock Button */}
-        <div className="flex items-center gap-2">
+        {/* Right: Quick Animation Switcher + Expand Height Toggle + Collapse Dock Button */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex items-center gap-1 bg-[#111622] border border-slate-600/90 rounded-lg p-1 shadow-xl">
+            {(
+              [
+                { id: 'idle', label: 'Reposo' },
+                { id: 'walk', label: 'Caminar' },
+                {
+                  id: 'attack',
+                  label:
+                    getEffectiveWeapon(config) === 'bone_recurved_bow'
+                      ? 'Tiro de Flechas'
+                      : 'Ataque / Fuego',
+                },
+                {
+                  id: 'jump_bite',
+                  label:
+                    getEffectiveWeapon(config) === 'bone_recurved_bow'
+                      ? 'Salto + Disparo'
+                      : isAnimalEnemy(config)
+                      ? 'Salto Mordida'
+                      : 'Salto + Golpeo',
+                },
+              ] as Array<{ id: AnimationState; label: string }>
+            ).map((st) => (
+              <button
+                key={st.id}
+                onClick={() => onAnimStateChange(st.id)}
+                className={`px-2 py-1 text-[11px] font-bold rounded transition-colors whitespace-nowrap cursor-pointer ${
+                  animState === st.id
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'text-slate-200 hover:bg-slate-800 hover:text-amber-300'
+                }`}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
+
           {!isCollapsed && (
             <button
               onClick={() => setIsTallDock((prev) => !prev)}
@@ -305,7 +394,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
               }`}
             >
               <Grid className="w-4 h-4" />
-              1. Personajes (40)
+              1. Personajes ({ALL_ARCHETYPE_KEYS.length})
             </button>
 
             <button
@@ -403,7 +492,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
             isTallDock ? 'max-h-[420px]' : 'max-h-[260px]'
           }`}
         >
-          {/* TAB 1: CATÁLOGO DE 30 PERSONAJES EN CUADRÍCULA VISIBLE */}
+          {/* TAB 1: CATÁLOGO DE PERSONAJES EN CUADRÍCULA VISIBLE */}
           {activeTab === 'catalog' && (
             <div className="space-y-3">
               {/* Category Filter Bar */}
@@ -417,7 +506,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                         : 'bg-[#171f30] text-slate-200 border border-slate-700 hover:border-slate-500'
                     }`}
                   >
-                    Todos (40)
+                    Todos ({ALL_ARCHETYPE_KEYS.length})
                   </button>
                   {(Object.keys(RACE_CATEGORY_LABELS) as RaceCategory[]).map((cat) => (
                     <button
@@ -482,7 +571,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
           {/* TAB 2: ANATOMÍA, ESQUELETO Y MORFOLOGÍA */}
           {activeTab === 'anatomy' && (
             <div className="space-y-4">
-              {/* Top Row: Skeleton Body Plan + Mesh Density (LOD) + Multi-Head Count */}
+              {/* Top Row: Skeleton Body Plan + Archetype Anatomy Category (Undead Bone vs Flesh) + Mesh Density (LOD) + Multi-Head Count */}
               <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-700/80">
                 <label className="flex flex-wrap items-center gap-2 text-xs sm:text-sm font-medium text-slate-100">
                   <span>Esqueleto 3D:</span>
@@ -501,6 +590,33 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                         {bp.label}
                       </option>
                     ))}
+                  </select>
+                </label>
+
+                <label className="flex flex-wrap items-center gap-2 text-xs sm:text-sm font-medium text-slate-100">
+                  <span>Categoría Anatómica:</span>
+                  <select
+                    value={getEffectiveAnatomyCategory(config)}
+                    onChange={(e) => {
+                      const nextCat = e.target.value as ArchetypeAnatomyCategory;
+                      onChangeConfig((prev) => ({
+                        ...prev,
+                        helm: nextCat === 'Undead' ? 'crowned_skull' : prev.helm,
+                        morphology: {
+                          ...prev.morphology,
+                          anatomyCategory: nextCat,
+                          furDensity: nextCat === 'Undead' ? 0 : prev.morphology.furDensity,
+                          hairStyle: nextCat === 'Undead' ? 'none' : prev.morphology.hairStyle,
+                        },
+                      }));
+                    }}
+                    className="bg-[#171f30] border border-amber-500/60 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm text-amber-300 font-semibold focus:outline-none focus:border-amber-400"
+                  >
+                    <option value="Undead">Undead (Costillas Expuestas, Cráneo y Cuencas Huecas 3D)</option>
+                    <option value="Flesh">Flesh (Carne y Musculatura Estándar)</option>
+                    <option value="Scaled">Scaled (Escamas Reptilianas / Dracónicas)</option>
+                    <option value="Chitin">Chitin (Caparazón Quitinoso)</option>
+                    <option value="Elemental">Elemental (Energía / Roca Arcana)</option>
                   </select>
                 </label>
 
@@ -744,6 +860,117 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                     className="accent-amber-500 cursor-pointer"
                   />
                 </label>
+
+                <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-amber-500/35">
+                  <div className="flex justify-between font-medium text-slate-200">
+                    <span className="text-amber-300 font-semibold">Músculos 3D (Anatomía)</span>
+                    <span className="font-mono-tabular text-amber-300">
+                      {Math.round(getEffectiveMuscleDefinition(config) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1.5}
+                    step={0.05}
+                    value={getEffectiveMuscleDefinition(config)}
+                    onChange={(e) =>
+                      onChangeConfig((prev) => ({
+                        ...prev,
+                        morphology: {
+                          ...prev.morphology,
+                          muscleDefinition: parseFloat(e.target.value),
+                        },
+                      }))
+                    }
+                    className="accent-amber-500 cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-amber-500/35">
+                  <span className="text-amber-300 font-semibold">Estilo de Pelo / Melena 3D</span>
+                  <select
+                    value={config.morphology.hairStyle ?? getEffectiveHairStyle(config)}
+                    onChange={(e) => {
+                      const nextStyle = e.target.value as HairStyleId;
+                      onChangeConfig((prev) => ({
+                        ...prev,
+                        morphology: {
+                          ...prev.morphology,
+                          hairStyle: nextStyle,
+                          furDensity:
+                            nextStyle === 'none'
+                              ? 0
+                              : Math.max(0.95, getEffectiveFurDensity(prev) || 1.15),
+                        },
+                      }));
+                    }}
+                    className="bg-[#0d121d] border border-slate-600 rounded-md px-2.5 py-1 text-xs sm:text-sm text-white focus:outline-none focus:border-amber-400"
+                  >
+                    <option value="full_fur_coat">Pelo Corporal Completo (Hebras 3D)</option>
+                    <option value="wild_mane_fur">Melena Leonina + Pelaje 3D</option>
+                    <option value="long_flowing_hair">Cabellera Larga Ondulada</option>
+                    <option value="dorsal_mohawk">Cresta / Lomo Erizado de Pelo</option>
+                    <option value="none">Sin Pelo 3D</option>
+                  </select>
+                </label>
+
+                <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-amber-500/35">
+                  <div className="flex justify-between font-medium text-slate-200">
+                    <span className="text-amber-300 font-semibold">Densidad de Pelo 3D</span>
+                    <span className="font-mono-tabular text-amber-300">
+                      {Math.round(getEffectiveFurDensity(config) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1.6}
+                    step={0.05}
+                    value={getEffectiveFurDensity(config)}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      onChangeConfig((prev) => ({
+                        ...prev,
+                        morphology: {
+                          ...prev.morphology,
+                          furDensity: val,
+                          hairStyle:
+                            val > 0.05 && getEffectiveHairStyle(prev) === 'none'
+                              ? 'full_fur_coat'
+                              : prev.morphology.hairStyle,
+                        },
+                      }));
+                    }}
+                    className="accent-amber-500 cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-amber-500/35">
+                  <div className="flex justify-between font-medium text-slate-200">
+                    <span className="text-amber-300 font-semibold">Longitud del Pelo 3D</span>
+                    <span className="font-mono-tabular text-amber-300">
+                      {Math.round(getEffectiveHairLength(config) * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.4}
+                    max={2.0}
+                    step={0.05}
+                    value={getEffectiveHairLength(config)}
+                    onChange={(e) =>
+                      onChangeConfig((prev) => ({
+                        ...prev,
+                        morphology: {
+                          ...prev.morphology,
+                          hairLength: parseFloat(e.target.value),
+                        },
+                      }))
+                    }
+                    className="accent-amber-500 cursor-pointer"
+                  />
+                </label>
               </div>
             </div>
           )}
@@ -790,18 +1017,27 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                   </select>
                 </label>
 
-                <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-200 font-semibold flex items-center gap-1.5">
-                    <Swords className="w-4 h-4 text-amber-400" /> Arma / Ataque
+                <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-amber-500/40">
+                  <span className="text-amber-300 font-semibold flex items-center gap-1.5">
+                    <Swords className="w-4 h-4 text-amber-400" />{' '}
+                    {isAnimalEnemy(config)
+                      ? 'Ataque Animal (Sin Armas)'
+                      : 'Arma / Ataque Principal'}
                   </span>
                   <select
-                    value={config.weapon}
-                    onChange={(e) =>
-                      onChangeConfig((prev) => ({ ...prev, weapon: e.target.value as WeaponType }))
-                    }
+                    value={getEffectiveWeapon(config)}
+                    onChange={(e) => {
+                      const nextWeapon = e.target.value as WeaponType;
+                      onChangeConfig((prev) => ({
+                        ...prev,
+                        weapon: nextWeapon,
+                        offhand: isAnimalEnemy(prev) ? 'none' : prev.offhand,
+                      }));
+                      onAnimStateChange(nextWeapon === 'leap_fang_bite' ? 'jump_bite' : 'attack');
+                    }}
                     className="bg-[#0d121d] border border-slate-600 rounded-md px-2.5 py-1.5 text-xs sm:text-sm text-white focus:outline-none focus:border-amber-400"
                   >
-                    {WEAPON_OPTIONS.map((w) => (
+                    {(isAnimalEnemy(config) ? ANIMAL_ATTACK_OPTIONS : WEAPON_OPTIONS).map((w) => (
                       <option key={w.id} value={w.id}>
                         {w.label}
                       </option>
@@ -809,27 +1045,64 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                   </select>
                 </label>
 
-                <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-slate-700">
-                  <span className="text-slate-200 font-semibold flex items-center gap-1.5">
-                    <Shield className="w-4 h-4 text-sky-400" /> Mano Izquierda
-                  </span>
-                  <select
-                    value={config.offhand}
-                    onChange={(e) =>
-                      onChangeConfig((prev) => ({
-                        ...prev,
-                        offhand: e.target.value as OffhandType,
-                      }))
-                    }
-                    className="bg-[#0d121d] border border-slate-600 rounded-md px-2.5 py-1.5 text-xs sm:text-sm text-white focus:outline-none focus:border-amber-400"
-                  >
-                    {OFFHAND_OPTIONS.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {isAnimalEnemy(config) ? (
+                  <div className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-amber-500/40">
+                    <span className="text-amber-300 font-semibold flex items-center justify-between">
+                      <span>Skill Natural (Boca / Salto)</span>
+                      <span className="text-[11px] text-emerald-400 font-mono-tabular">
+                        Sin Armas
+                      </span>
+                    </span>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
+                      {ANIMAL_ATTACK_OPTIONS.map((atk) => {
+                        const active = getEffectiveWeapon(config) === atk.id;
+                        return (
+                          <button
+                            key={atk.id}
+                            type="button"
+                            onClick={() => {
+                              onChangeConfig((prev) => ({
+                                ...prev,
+                                weapon: atk.id,
+                                offhand: 'none',
+                              }));
+                              onAnimStateChange(atk.id === 'leap_fang_bite' ? 'jump_bite' : 'attack');
+                            }}
+                            className={`px-2 py-1 rounded text-[11px] font-bold transition-colors cursor-pointer truncate ${
+                              active
+                                ? 'bg-amber-500 text-slate-950'
+                                : 'bg-[#0d121d] text-slate-200 border border-slate-600 hover:border-amber-400'
+                            }`}
+                          >
+                            {atk.shortLabel}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <label className="flex flex-col gap-1.5 text-xs sm:text-sm bg-[#161e2e] p-2.5 rounded-lg border border-slate-700">
+                    <span className="text-slate-200 font-semibold flex items-center gap-1.5">
+                      <Shield className="w-4 h-4 text-sky-400" /> Mano Izquierda
+                    </span>
+                    <select
+                      value={config.offhand}
+                      onChange={(e) =>
+                        onChangeConfig((prev) => ({
+                          ...prev,
+                          offhand: e.target.value as OffhandType,
+                        }))
+                      }
+                      className="bg-[#0d121d] border border-slate-600 rounded-md px-2.5 py-1.5 text-xs sm:text-sm text-white focus:outline-none focus:border-amber-400"
+                    >
+                      {OFFHAND_OPTIONS.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
 
               {/* Surface Texture Pattern (Albedo + Bump) + Material Presets & Color Pickers */}
@@ -840,8 +1113,9 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                   </span>
                   {(
                     [
+                      { id: 'wolf_fur', label: 'Pelaje Denso' },
                       { id: 'scales', label: 'Escamas Dragón' },
-                      { id: 'chitin_fur', label: 'Pelaje / Quitina' },
+                      { id: 'chitin_fur', label: 'Quitina / Cuero' },
                       { id: 'damascus_plate', label: 'Acero Forjado' },
                       { id: 'runic_obsidian', label: 'Roca Volcánica' },
                       { id: 'none', label: 'Liso' },
@@ -875,7 +1149,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                       min={0}
                       max={1.4}
                       step={0.05}
-                      value={config.materials.textureRelief ?? 0.75}
+                      value={config.materials.textureRelief ?? 0.85}
                       onChange={(e) =>
                         onChangeConfig((prev) => ({
                           ...prev,
@@ -886,7 +1160,38 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                         }))
                       }
                       className="w-16 accent-amber-500 cursor-pointer"
+                      aria-label="Intensidad de relieve del patrón"
                     />
+                    <span className="font-mono-tabular text-[11px] text-amber-300 w-8">
+                      {Math.round((config.materials.textureRelief ?? 0.85) * 100)}%
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-slate-700 text-xs text-slate-200">
+                    <span className="text-sky-300 font-semibold whitespace-nowrap">
+                      Grano y Desgaste (Noise):
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={2.0}
+                      step={0.05}
+                      value={config.materials.grainWearIntensity ?? 0.85}
+                      onChange={(e) =>
+                        onChangeConfig((prev) => ({
+                          ...prev,
+                          materials: {
+                            ...prev.materials,
+                            grainWearIntensity: parseFloat(e.target.value),
+                          },
+                        }))
+                      }
+                      className="w-20 accent-sky-400 cursor-pointer"
+                      aria-label="Intensidad de grano orgánico y desgaste (Noise-Map Strength)"
+                    />
+                    <span className="font-mono-tabular text-[11px] text-sky-300 w-9">
+                      {Math.round((config.materials.grainWearIntensity ?? 0.85) * 100)}%
+                    </span>
                   </div>
                 </div>
 
@@ -972,7 +1277,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
 
           {/* TAB 4: ANIMACIÓN, CÁMARA Y ESCENA */}
           {activeTab === 'scene' && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 items-stretch">
               <div className="bg-[#161e2e] p-3 rounded-lg border border-slate-700 space-y-2">
                 <div className="flex items-center justify-between text-xs font-semibold text-slate-200">
                   <span>Estado Cinemático:</span>
@@ -984,8 +1289,23 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                   {(
                     [
                       { id: 'idle', label: 'Reposo' },
-                      { id: 'walk', label: 'Marcha / Vuelo' },
-                      { id: 'attack', label: 'Ataque / Aliento' },
+                      { id: 'walk', label: 'Marcha Realista' },
+                      {
+                        id: 'attack',
+                        label:
+                          getEffectiveWeapon(config) === 'bone_recurved_bow'
+                            ? 'Tiro de Flechas'
+                            : 'Ataque / Fuego',
+                      },
+                      {
+                        id: 'jump_bite',
+                        label:
+                          getEffectiveWeapon(config) === 'bone_recurved_bow'
+                            ? 'Salto + Disparo'
+                            : isAnimalEnemy(config)
+                            ? 'Salto Mordida'
+                            : 'Salto + Golpeo',
+                      },
                       { id: 'hit', label: 'Impacto' },
                       { id: 'death', label: 'Derrota' },
                     ] as Array<{ id: AnimationState; label: string }>
@@ -993,13 +1313,50 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                     <button
                       key={st.id}
                       onClick={() => onAnimStateChange(st.id)}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`px-2.5 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         animState === st.id
                           ? 'bg-amber-500 text-slate-950 border-amber-400'
                           : 'bg-[#0d121d] border-slate-700 text-slate-200 hover:border-slate-500'
                       }`}
                     >
                       {st.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-[#161e2e] p-3 rounded-lg border border-slate-700 space-y-2">
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-200">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    Partículas de Aura (Anclajes):
+                  </span>
+                  <span className="font-mono-tabular text-[11px] text-amber-300">
+                    {config.morphology.auraShardCount + 4} puntos
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(
+                    [
+                      { id: 'none', label: 'Desactivado' },
+                      { id: 'volcanic_smoke', label: 'Humo Volcánico' },
+                      { id: 'arcane_sparks', label: 'Chispas Arcanas' },
+                    ] as Array<{ id: AuraParticleEffectId; label: string }>
+                  ).map((fx) => (
+                    <button
+                      key={fx.id}
+                      onClick={() => onAuraParticleModeChange(fx.id)}
+                      className={`px-2.5 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        auraParticleMode === fx.id
+                          ? fx.id === 'volcanic_smoke'
+                            ? 'bg-orange-500 text-slate-950 border-orange-300'
+                            : fx.id === 'arcane_sparks'
+                            ? 'bg-amber-400 text-slate-950 border-amber-300'
+                            : 'bg-slate-300 text-slate-950 border-white'
+                          : 'bg-[#0d121d] border-slate-700 text-slate-200 hover:border-slate-500'
+                      }`}
+                    >
+                      {fx.label}
                     </button>
                   ))}
                 </div>
@@ -1022,7 +1379,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
                     <button
                       key={cam.id}
                       onClick={() => onCameraPresetChange(cam.id)}
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`px-2.5 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         cameraPreset === cam.id
                           ? 'bg-sky-400 text-slate-950 border-sky-300'
                           : 'bg-[#0d121d] border-slate-700 text-slate-200 hover:border-slate-500'
@@ -1052,19 +1409,19 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
 
                   <button
                     onClick={onToggleHitboxes}
-                    className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       showHitboxes
                         ? 'bg-emerald-400 text-slate-950 border-emerald-300'
                         : 'bg-[#0d121d] border-slate-700 text-slate-200'
                     }`}
                   >
                     <Eye className="w-3.5 h-3.5" />
-                    Hitboxes
+                    Huesos / Hitboxes
                   </button>
 
                   <button
                     onClick={onToggleWireframe}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    className={`px-2.5 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       wireframe
                         ? 'bg-amber-400 text-slate-950 border-amber-300'
                         : 'bg-[#0d121d] border-slate-700 text-slate-200'
@@ -1075,7 +1432,7 @@ export const BottomControlDock: React.FC<BottomControlDockProps> = ({
 
                   <button
                     onClick={onToggleAutoRotate}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    className={`px-2.5 py-1.5 text-xs font-semibold rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       autoRotate
                         ? 'bg-sky-400 text-slate-950 border-sky-300'
                         : 'bg-[#0d121d] border-slate-700 text-slate-200'

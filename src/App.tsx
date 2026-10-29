@@ -7,6 +7,7 @@ import {
   ARCHETYPE_PRESETS,
   AnimationState,
   ArchetypeId,
+  AuraParticleEffectId,
   CameraPresetId,
   DorsalType,
   EnemyConfig,
@@ -18,6 +19,7 @@ import {
   PartInspectionInfo,
   WeaponType,
   calculateThreatScore,
+  isAnimalEnemy,
 } from './types/enemy';
 import {
    createProceduralTextureSet,
@@ -29,7 +31,7 @@ import {
   updateEnemyAnimation,
   updateEnemyMaterialsInPlace,
 } from './three/enemyBuilder';
-import { exportEnemyToGLB } from './three/exporters';
+import { exportEnemyToGLB, exportEnemyToHTML } from './three/exporters';
 import { BottomControlDock, DockTabId } from './components/BottomControlDock';
 import { ExportModal } from './components/ExportModal';
 
@@ -118,6 +120,7 @@ export default function App() {
   const [showHitboxes, setShowHitboxes] = useState(false);
   const [wireframe, setWireframe] = useState(false);
   const [autoRotate, setAutoRotate] = useState(false);
+  const [auraParticleMode, setAuraParticleMode] = useState<AuraParticleEffectId>('arcane_sparks');
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [exportStatusMessage, setExportStatusMessage] = useState<string | null>(null);
   const [inspectedPart, setInspectedPart] = useState<PartInspectionInfo | null>(null);
@@ -154,6 +157,9 @@ export default function App() {
 
   const autoRotateRef = useRef<boolean>(autoRotate);
   autoRotateRef.current = autoRotate;
+
+  const auraParticleRef = useRef<AuraParticleEffectId>(auraParticleMode);
+  auraParticleRef.current = auraParticleMode;
 
   const camTransitionRef = useRef<{
     active: boolean;
@@ -409,7 +415,13 @@ export default function App() {
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects(rigRef.current.exportableGroup.children, true);
       if (hits.length > 0) {
-        const info = hits[0].object.userData?.partInfo as PartInspectionInfo | undefined;
+        const hit = hits[0];
+        const resolver = hit.object.userData?.resolvePartByPoint as
+          | ((pt: THREE.Vector3) => PartInspectionInfo | undefined)
+          | undefined;
+        const info =
+          (resolver ? resolver(hit.point) : undefined) ||
+          (hit.object.userData?.partInfo as PartInspectionInfo | undefined);
         if (info) {
           setInspectedPart(info);
         }
@@ -491,7 +503,8 @@ export default function App() {
           elapsed,
           delta,
           animSpeedRef.current,
-          explodedRef.current
+          explodedRef.current,
+          auraParticleRef.current
         );
       }
 
@@ -666,24 +679,23 @@ export default function App() {
             'bio_chitin_spines',
           ];
 
-    const compatibleWeapons: WeaponType[] =
-      bp === 'dragon_wyvern'
-        ? ['dragon_breath_maw', 'feral_claws_fangs']
-        : bp === 'quadruped_beast' || bp === 'arachnid_scorpion'
-        ? ['feral_claws_fangs', 'venom_scythe_claws', 'twin_reaver_axes']
-        : [
-            'runic_greatsword',
-            'obsidian_warhammer',
-            'arcane_staff',
-            'twin_reaver_axes',
-            'radiant_halberd',
-            'venom_scythe_claws',
-          ];
+    const isAnimal = isAnimalEnemy(basePreset);
 
-    const compatibleOffhands: OffhandType[] =
-      bp === 'dragon_wyvern' || bp === 'quadruped_beast' || bp === 'arachnid_scorpion'
-        ? ['none', 'dual_blade']
-        : ['tower_shield', 'runic_buckler', 'phylactery_orb', 'dual_blade', 'none'];
+    const compatibleWeapons: WeaponType[] = isAnimal
+      ? ['feral_claws_fangs', 'leap_fang_bite', 'ram_charge', 'dragon_breath_maw', 'frost_breath_maw']
+      : [
+          'runic_greatsword',
+          'obsidian_warhammer',
+          'arcane_staff',
+          'twin_reaver_axes',
+          'radiant_halberd',
+          'venom_scythe_claws',
+          'bone_recurved_bow',
+        ];
+
+    const compatibleOffhands: OffhandType[] = isAnimal
+      ? ['none']
+      : ['tower_shield', 'runic_buckler', 'phylactery_orb', 'dual_blade', 'none'];
 
     // 65% chance to keep the archetype's signature material family or pick a dramatic variant
     const chosenMatKey = Math.random() > 0.35 ? basePreset.materials.preset : pick(matKeys);
@@ -713,8 +725,14 @@ export default function App() {
         tailLength: jitter(bm.tailLength, 0.0, 1.65),
         snoutLength: jitter(bm.snoutLength, 0.35, 1.45),
         headCount:
-          chosenArch === 'abyssal_hydra' || chosenArch === 'cerberus_hellhound'
+          chosenArch === 'abyssal_hydra' ||
+          chosenArch === 'cerberus_hellhound' ||
+          chosenArch === 'cryo_hydra_trident' ||
+          chosenArch === 'putrid_bog_hydra' ||
+          chosenArch === 'crypt_cerberus_hound'
             ? 3
+            : chosenArch === 'stitched_necromancy_chimera'
+            ? 2
             : basePreset.raceCategory === 'starter_animals'
             ? 1
             : Math.random() > 0.86
@@ -732,18 +750,24 @@ export default function App() {
         preset: chosenMatKey,
         ...matPreset,
         texturePattern: prev.materials.texturePattern,
-        textureRelief: prev.materials.textureRelief ?? 0.8,
+        textureRelief: prev.materials.textureRelief ?? 0.85,
+        grainWearIntensity: prev.materials.grainWearIntensity ?? matPreset.grainWearIntensity,
       },
     }));
   }, []);
 
-  // Binary .GLB Export Handler
+  // Binary .GLB Export Handler (includes SkinnedMesh, 5 Clips, Weapon Slash Trail & Aura Motes)
   const handleExportGLB = useCallback(
     async (binary = true) => {
       if (!rigRef.current) return;
       try {
-        setExportStatusMessage('Empaquetando geometría y materiales PBR...');
-        const { sizeBytes, filename } = await exportEnemyToGLB(rigRef.current, config, binary);
+        setExportStatusMessage('Empaquetando geometría, estela y partículas en .GLB...');
+        const { sizeBytes, filename } = await exportEnemyToGLB(
+          rigRef.current,
+          config,
+          binary,
+          auraParticleMode
+        );
         const kb = (sizeBytes / 1024).toFixed(1);
         setExportStatusMessage(`Exportado: ${filename} (${kb} KB)`);
         setTimeout(() => setExportStatusMessage(null), 5000);
@@ -752,8 +776,27 @@ export default function App() {
         setExportStatusMessage('Error al exportar el archivo GLB.');
       }
     },
-    [config]
+    [config, auraParticleMode]
   );
+
+  // Standalone Single-File .HTML Viewer Export Handler (Base64 .GLB + Live Particles + Attack Trail)
+  const handleExportHTML = useCallback(async () => {
+    if (!rigRef.current) return;
+    try {
+      setExportStatusMessage('Empaquetando visor autónomo .HTML con .GLB Base64 y partículas...');
+      const { sizeBytes, filename } = await exportEnemyToHTML(
+        rigRef.current,
+        config,
+        auraParticleMode
+      );
+      const kb = (sizeBytes / 1024).toFixed(1);
+      setExportStatusMessage(`Exportado: ${filename} (${kb} KB)`);
+      setTimeout(() => setExportStatusMessage(null), 5000);
+    } catch (err) {
+      console.error(err);
+      setExportStatusMessage('Error al exportar el visor HTML.');
+    }
+  }, [config, auraParticleMode]);
 
   const threatScore = calculateThreatScore(config.stats);
 
@@ -784,7 +827,7 @@ export default function App() {
               activeTab === 'catalog' ? 'text-amber-400 underline underline-offset-4' : ''
             }`}
           >
-            Personajes (40)
+            Personajes ({Object.keys(ARCHETYPE_PRESETS).length})
           </button>
           <button
             onClick={() => {
@@ -836,7 +879,7 @@ export default function App() {
             onClick={() => setIsExportModalOpen(true)}
             className="px-3 sm:px-4 py-2 text-xs font-semibold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Exportar (.GLB / Three.js)
+            Exportar (.GLB / .HTML / Three.js)
           </button>
         </div>
       </header>
@@ -856,7 +899,9 @@ export default function App() {
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300 font-mono-tabular pointer-events-none">
           <span>{config.title}</span>
           <span aria-hidden="true">·</span>
-          <span>{meshMetrics.partCount} piezas 3D</span>
+          <span className="text-emerald-300 font-semibold">SkinnedMesh ({meshMetrics.partCount} huesos)</span>
+          <span aria-hidden="true">·</span>
+          <span>6 Clips GLB</span>
           <span aria-hidden="true">·</span>
           <span>{meshMetrics.totalTriangles.toLocaleString()} tris</span>
           <span aria-hidden="true">·</span>
@@ -915,19 +960,22 @@ export default function App() {
         onToggleWireframe={() => setWireframe((prev) => !prev)}
         autoRotate={autoRotate}
         onToggleAutoRotate={() => setAutoRotate((prev) => !prev)}
+        auraParticleMode={auraParticleMode}
+        onAuraParticleModeChange={setAuraParticleMode}
         onRandomize={handleRandomize}
         onQuickExportGLB={() => handleExportGLB(true)}
         onOpenExportModal={() => setIsExportModalOpen(true)}
         inspectedPart={inspectedPart}
       />
 
-      {/* 5. Export & Integration Pipeline Modal (.GLB + Three.js TS + JSON) */}
+      {/* 5. Export & Integration Pipeline Modal (.GLB + .HTML + Three.js TS + JSON) */}
       <ExportModal
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}
         config={config}
         metrics={meshMetrics}
         onExportGLB={handleExportGLB}
+        onExportHTML={handleExportHTML}
         onImportConfig={(imported) => setConfig(imported)}
         exportStatusMessage={exportStatusMessage}
       />
